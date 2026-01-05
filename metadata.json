@@ -1,0 +1,7 @@
+{
+  "name": "SignSpeak Live – ISL Production Suite",
+  "description": "High-fidelity Indian Sign Language (ISL) translation engine powered by Gemini reasoning and Three.js 3D animation.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
