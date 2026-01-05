@@ -1,104 +1,117 @@
-
+import streamlit as st
 import os
 import json
+import time
 from groq import Groq
+import google.generativeai as genai
 
-# 1. SETUP: Initialize the Groq Client
-# Ensure you have set the environment variable GROQ_API_KEY
-# or replace os.environ.get(...) with your actual key string.
-client = Groq(
-    api_key=os.environ.get("GROQ_API_KEY"),
-)
+# Page Config
+st.set_page_config(page_title="Groq ISL Engine", page_icon="⚡", layout="wide")
 
-# 2. CONFIGURATION: The "Brain" of the operation
-# This exact prompt forces the AI to follow your specific rules and JSON schema.
-SYSTEM_INSTRUCTION = """
-You are an expert AI reasoning engine specialized in sign-language translation, 
-linguistic restructuring, and motion-sequence generation.
+# --- CSS for the "Dark Mode" Terminal Look ---
+st.markdown("""
+<style>
+    .stApp { background-color: #050505; color: white; }
+    .stTextInput > div > div > input { background-color: #1a1a1a; color: white; border: 1px solid #333; }
+    .stButton > button { background-color: #ffffff; color: black; font-weight: bold; }
+    .stMarkdown code { background-color: #1a1a1a; color: #00ff00; }
+</style>
+""", unsafe_allow_html=True)
 
-You are running via the GROQ API.
+# --- 1. SETUP KEYS ---
+# Try to get keys from Secrets (Streamlit Cloud) or Environment
+groq_key = os.environ.get("GROQ_API_KEY")
+google_key = os.environ.get("GOOGLE_API_KEY")
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎯 CORE OBJECTIVE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Convert spoken English (from voice input) into Indian Sign Language (ISL) 
-motion instructions that will be used to generate a SIGN LANGUAGE VIDEO.
+# Fallback: Sidebar Input for Keys if not in environment
+with st.sidebar:
+    st.header("🔑 API Configuration")
+    if not groq_key:
+        groq_key = st.text_input("Enter GROQ API Key", type="password")
+    if not google_key:
+        google_key = st.text_input("Enter Google API Key (Optional)", type="password")
+    
+    st.divider()
+    st.info("System Status: Online")
 
-You MUST NOT generate images or videos yourself.
-You ONLY generate structured JSON instructions.
+# --- 2. LOGIC FUNCTIONS ---
+def get_groq_client():
+    if not groq_key:
+        return None
+    return Groq(api_key=groq_key)
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📚 DATASET CONTEXT (MANDATORY)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-The system uses the Kaggle dataset: "Indian Sign Language (ISL) – prathumarikeri"
-Assume:
-• Each sign token matches gestures in this dataset.
-• If a word is not available, spell it using alphabet signs.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🧠 YOUR RESPONSIBILITY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. Convert English sentence into ISL grammar (SOV structure).
-2. Remove fillers (is, am, are, the).
-3. Output a SEQUENCE of sign instructions.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📤 OUTPUT FORMAT (STRICT JSON ONLY)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Return ONLY valid JSON. No markdown. No explanations.
-Example:
+SYSTEM_INSTRUCTION = """You are the SignSpeak GROQ Reasoning Engine.
+Task: Translate spoken English into Indian Sign Language (ISL) gloss.
+Output MUST be a valid JSON object.
+Mandatory Schema:
 {
-  "spoken_text": "Please open your notebooks",
+  "spoken_text": string,
   "isl_sequence": [
-    { "sign_id": "PLEASE", "duration_ms": 700, "handshape": "FLAT_PALM", "expression": "POLITE" }
-  ]
-}
-"""
+    { "sign_id": string, "duration_ms": number, "expression": "SMILE" | "NEUTRAL" | "POLITE" | "FROWN" }
+  ],
+  "rendering_prompt": string
+}"""
 
-def generate_isl_sequence(spoken_text):
-    """
-    Sends text to Groq and returns a parsed dictionary of ISL instructions.
-    """
+def process_text(client, text):
     try:
-        print(f"🎤 Processing Input: '{spoken_text}'...")
-
-        # 3. THE API CALL
-        # We use Llama 3 (70b) for high reasoning capability and strict instruction following.
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {
-                    "role": "system",
-                    "content": SYSTEM_INSTRUCTION
-                },
-                {
-                    "role": "user",
-                    "content": spoken_text
-                }
+                {"role": "system", "content": SYSTEM_INSTRUCTION},
+                {"role": "user", "content": text}
             ],
-            temperature=0.1, # Low temperature = more deterministic/consistent output
-            response_format={"type": "json_object"} # Forces strict JSON mode
+            response_format={"type": "json_object"},
+            temperature=0.1
         )
-
-        # 4. PARSING RESPONSE
-        response_content = completion.choices[0].message.content
-        isl_data = json.loads(response_content)
-        
-        return isl_data
-
-    except json.JSONDecodeError:
-        return {"error": "Failed to parse JSON from Groq response."}
+        return json.loads(completion.choices[0].message.content)
     except Exception as e:
-        return {"error": str(e)}
+        st.error(f"Groq Error: {e}")
+        return None
 
-# --- EXECUTION BLOCK ---
-if __name__ == "__main__":
-    # Example Input: A typical classroom command
-    input_text = "Good morning students, please open your math books."
+# --- 3. UI LAYOUT ---
+st.title("⚡ GROQ ISL ENGINE")
+st.caption("Llama-3.3-70b Reasoning Node")
+
+# Input Section
+col1, col2 = st.columns([3, 1])
+with col1:
+    # We use text_input instead of Microphone for Cloud compatibility
+    # (Browser mics require special JS components in Streamlit)
+    user_input = st.text_input("Input Command", placeholder="Type what you want to say...")
+
+with col2:
+    process_btn = st.button("🚀 PROCESS", use_container_width=True)
+
+# Processing Logic
+if process_btn and user_input and groq_key:
+    client = get_groq_client()
     
-    # Get the ISL Instructions
-    result = generate_isl_sequence(input_text)
-    
-    # Print the clean JSON output
-    print("\n✅ ISL GENERATION SUCCESSFUL:\n")
-    print(json.dumps(result, indent=2))
+    with st.status("Processing...", expanded=True) as status:
+        st.write("🧠 Connecting to Groq Inference Engine...")
+        data = process_text(client, user_input)
+        
+        if data:
+            st.write("✅ ISL Sequence Generated")
+            status.update(label="Complete", state="complete", expanded=False)
+            
+            # Display Results
+            st.subheader("Inference Result")
+            
+            # 1. Visual JSON
+            st.json(data)
+            
+            # 2. Gloss View
+            gloss_sequence = [item['sign_id'] for item in data.get('isl_sequence', [])]
+            st.success(f"ISL GLOSS: {' → '.join(gloss_sequence)}")
+            
+            # 3. Video Render (Optional)
+            if google_key and data.get("rendering_prompt"):
+                st.divider()
+                st.write("🎬 **Video Production Node (Google Veo)**")
+                st.info("Video generation requires a whitelisted Google Vertex AI Project.")
+                # (Video logic placeholder - usually requires Cloud bucket storage for Streamlit)
+        else:
+            status.update(label="Failed", state="error")
+
+elif process_btn and not groq_key:
+    st.warning("Please enter your GROQ API Key in the sidebar.")
