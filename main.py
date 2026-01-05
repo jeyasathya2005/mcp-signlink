@@ -4,7 +4,7 @@ import json
 import time
 import tempfile
 from groq import Groq
-import google.generativeai as genai
+from google import genai  # <--- New Library Import
 
 # Page Config
 st.set_page_config(page_title="SignSpeak AI", page_icon="👋", layout="wide")
@@ -37,8 +37,6 @@ with st.sidebar:
 def transcribe_audio(client, audio_bytes):
     """Module 1: HEARING (Groq Whisper)"""
     try:
-        # Groq API requires a file-like object with a name
-        # We create a temporary file to handle the stream
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
             tmp_file.write(audio_bytes)
             tmp_file_path = tmp_file.name
@@ -46,12 +44,10 @@ def transcribe_audio(client, audio_bytes):
         with open(tmp_file_path, "rb") as file:
             transcription = client.audio.transcriptions.create(
                 file=(tmp_file_path, file.read()),
-                model="whisper-large-v3", # State-of-the-art multilingual model
+                model="whisper-large-v3",
                 response_format="json",
                 temperature=0.0
             )
-        
-        # Cleanup temp file
         os.remove(tmp_file_path)
         return transcription.text
     except Exception as e:
@@ -65,8 +61,8 @@ def get_isl_instructions(client, text):
     Output JSON only. Schema:
     {
       "spoken_text": string,
-      "isl_gloss": string (The grammatical order of signs, e.g., "BOOK OPEN PLEASE"),
-      "rendering_prompt": string (A visual description for a video generator, e.g., "A cinematic shot of an Indian teacher signing 'Open Book' with a smile, studio lighting, 4k")
+      "isl_gloss": string,
+      "rendering_prompt": string
     }
     """
     try:
@@ -85,22 +81,20 @@ def get_isl_instructions(client, text):
         return None
 
 def generate_video(prompt):
-    """Module 3: VISION (Google Veo)"""
+    """Module 3: VISION (Google Veo via New SDK)"""
     if not google_key:
         st.warning("Google API Key required for video generation.")
         return None
         
     try:
-        genai.configure(api_key=google_key)
-        # Check for available models, prioritizing Veo
-        # Note: Veo access depends on your Google AI Studio allowlist status
-        model_name = "veo-3.1-generate-preview" 
+        # NEW SDK SETUP
+        client = genai.Client(api_key=google_key)
         
-        st.write(f"🎞️ Requesting video from: `{model_name}`...")
-        model = genai.GenerativeModel(model_name)
+        st.write("🎞️ Requesting video from Veo...")
         
-        # Veo generation is asynchronous (it takes time)
-        operation = model.generate_videos(
+        # Correct method for the new SDK
+        operation = client.models.generate_videos(
+            model="veo-3.1-generate-preview",
             prompt=prompt,
             config={'number_of_videos': 1, 'aspect_ratio': '16:9'}
         )
@@ -110,16 +104,19 @@ def generate_video(prompt):
         status_text = st.empty()
         
         while not operation.done:
-            status_text.text("Rendering neural video... (this may take ~30-60s)")
+            status_text.text("Rendering neural video... (this takes ~30-60s)")
             time.sleep(5)
             progress_bar.progress(50)
+            # In the new SDK, we re-fetch the operation status
+            operation = client.operations.get(operation)
             
         progress_bar.progress(100)
         
-        if operation.result:
-            return operation.result # Returns the video resource/URL
+        if operation.result and operation.result.generated_videos:
+            # The new SDK returns a structure we can access directly
+            return operation.result.generated_videos[0].video.uri
         else:
-            st.error("Video generation completed but returned no result.")
+            st.error("Video generation finished but returned no content.")
             return None
             
     except Exception as e:
@@ -131,27 +128,22 @@ def generate_video(prompt):
 st.title("🗣️ SignSpeak: Voice-to-Video")
 st.caption("Powered by Groq Whisper, Llama 3, and Google Veo")
 
-# A. VOICE INPUT
 st.subheader("1. Voice Input")
 audio_value = st.audio_input("Record your command")
 
 if audio_value and groq_key:
-    client = Groq(api_key=groq_key)
+    groq_client = Groq(api_key=groq_key)
     
-    # B. PROCESS PIPELINE
     with st.spinner("🎧 Transcribing audio..."):
-        # 1. Transcribe
-        transcribed_text = transcribe_audio(client, audio_value.read())
+        transcribed_text = transcribe_audio(groq_client, audio_value.read())
     
     if transcribed_text:
         st.success(f"You said: \"{transcribed_text}\"")
         
         with st.spinner("🧠 Converting to ISL Structure..."):
-            # 2. Reason
-            isl_data = get_isl_instructions(client, transcribed_text)
+            isl_data = get_isl_instructions(groq_client, transcribed_text)
             
         if isl_data:
-            # Display Logic
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("2. ISL Logic")
@@ -162,12 +154,9 @@ if audio_value and groq_key:
                 st.subheader("3. Video Output")
                 render_prompt = isl_data.get('rendering_prompt')
                 
-                # 3. Generate Video
                 if st.button("🎬 Generate AI Video", type="primary"):
                     if render_prompt:
-                        video_result = generate_video(render_prompt)
-                        if video_result:
-                            st.video(video_result.video.uri)
+                        video_uri = generate_video(render_prompt)
+                        if video_uri:
+                            st.video(video_uri)
                             st.success("Video Generated Successfully!")
-                    else:
-                        st.warning("No rendering prompt available.")
