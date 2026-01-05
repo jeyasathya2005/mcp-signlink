@@ -2,62 +2,78 @@ import streamlit as st
 import os
 import json
 import time
+import tempfile
 from groq import Groq
 import google.generativeai as genai
 
 # Page Config
-st.set_page_config(page_title="Groq ISL Engine", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="SignSpeak AI", page_icon="👋", layout="wide")
 
-# --- CSS for the "Dark Mode" Terminal Look ---
+# --- CSS Styling ---
 st.markdown("""
 <style>
-    .stApp { background-color: #050505; color: white; }
-    .stTextInput > div > div > input { background-color: #1a1a1a; color: white; border: 1px solid #333; }
-    .stButton > button { background-color: #ffffff; color: black; font-weight: bold; }
-    .stMarkdown code { background-color: #1a1a1a; color: #00ff00; }
+    .stApp { background-color: #0e1117; color: white; }
+    .stButton > button { background-color: #ff4b4b; color: white; border-radius: 8px; }
+    .stAudio { width: 100%; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- 1. SETUP KEYS ---
-# Try to get keys from Secrets (Streamlit Cloud) or Environment
 groq_key = os.environ.get("GROQ_API_KEY")
 google_key = os.environ.get("GOOGLE_API_KEY")
 
-# Fallback: Sidebar Input for Keys if not in environment
 with st.sidebar:
-    st.header("🔑 API Configuration")
+    st.header("🔑 Configuration")
     if not groq_key:
-        groq_key = st.text_input("Enter GROQ API Key", type="password")
+        groq_key = st.text_input("Groq API Key", type="password")
     if not google_key:
-        google_key = st.text_input("Enter Google API Key (Optional)", type="password")
+        google_key = st.text_input("Google API Key", type="password")
     
     st.divider()
-    st.info("System Status: Online")
+    st.info("Status: Ready to Process")
 
-# --- 2. LOGIC FUNCTIONS ---
-def get_groq_client():
-    if not groq_key:
+# --- 2. AI MODULES ---
+
+def transcribe_audio(client, audio_bytes):
+    """Module 1: HEARING (Groq Whisper)"""
+    try:
+        # Groq API requires a file-like object with a name
+        # We create a temporary file to handle the stream
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+            tmp_file.write(audio_bytes)
+            tmp_file_path = tmp_file.name
+
+        with open(tmp_file_path, "rb") as file:
+            transcription = client.audio.transcriptions.create(
+                file=(tmp_file_path, file.read()),
+                model="whisper-large-v3", # State-of-the-art multilingual model
+                response_format="json",
+                temperature=0.0
+            )
+        
+        # Cleanup temp file
+        os.remove(tmp_file_path)
+        return transcription.text
+    except Exception as e:
+        st.error(f"Transcription Error: {e}")
         return None
-    return Groq(api_key=groq_key)
 
-SYSTEM_INSTRUCTION = """You are the SignSpeak GROQ Reasoning Engine.
-Task: Translate spoken English into Indian Sign Language (ISL) gloss.
-Output MUST be a valid JSON object.
-Mandatory Schema:
-{
-  "spoken_text": string,
-  "isl_sequence": [
-    { "sign_id": string, "duration_ms": number, "expression": "SMILE" | "NEUTRAL" | "POLITE" | "FROWN" }
-  ],
-  "rendering_prompt": string
-}"""
-
-def process_text(client, text):
+def get_isl_instructions(client, text):
+    """Module 2: BRAIN (Groq Llama-3)"""
+    system_prompt = """
+    You are the SignSpeak Engine. Convert spoken English to Indian Sign Language (ISL) parameters.
+    Output JSON only. Schema:
+    {
+      "spoken_text": string,
+      "isl_gloss": string (The grammatical order of signs, e.g., "BOOK OPEN PLEASE"),
+      "rendering_prompt": string (A visual description for a video generator, e.g., "A cinematic shot of an Indian teacher signing 'Open Book' with a smile, studio lighting, 4k")
+    }
+    """
     try:
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": SYSTEM_INSTRUCTION},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": text}
             ],
             response_format={"type": "json_object"},
@@ -65,53 +81,93 @@ def process_text(client, text):
         )
         return json.loads(completion.choices[0].message.content)
     except Exception as e:
-        st.error(f"Groq Error: {e}")
+        st.error(f"Reasoning Error: {e}")
         return None
 
-# --- 3. UI LAYOUT ---
-st.title("⚡ GROQ ISL ENGINE")
-st.caption("Llama-3.3-70b Reasoning Node")
-
-# Input Section
-col1, col2 = st.columns([3, 1])
-with col1:
-    # We use text_input instead of Microphone for Cloud compatibility
-    # (Browser mics require special JS components in Streamlit)
-    user_input = st.text_input("Input Command", placeholder="Type what you want to say...")
-
-with col2:
-    process_btn = st.button("🚀 PROCESS", use_container_width=True)
-
-# Processing Logic
-if process_btn and user_input and groq_key:
-    client = get_groq_client()
-    
-    with st.status("Processing...", expanded=True) as status:
-        st.write("🧠 Connecting to Groq Inference Engine...")
-        data = process_text(client, user_input)
+def generate_video(prompt):
+    """Module 3: VISION (Google Veo)"""
+    if not google_key:
+        st.warning("Google API Key required for video generation.")
+        return None
         
-        if data:
-            st.write("✅ ISL Sequence Generated")
-            status.update(label="Complete", state="complete", expanded=False)
+    try:
+        genai.configure(api_key=google_key)
+        # Check for available models, prioritizing Veo
+        # Note: Veo access depends on your Google AI Studio allowlist status
+        model_name = "veo-3.1-generate-preview" 
+        
+        st.write(f"🎞️ Requesting video from: `{model_name}`...")
+        model = genai.GenerativeModel(model_name)
+        
+        # Veo generation is asynchronous (it takes time)
+        operation = model.generate_videos(
+            prompt=prompt,
+            config={'number_of_videos': 1, 'aspect_ratio': '16:9'}
+        )
+        
+        # Polling loop
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        while not operation.done:
+            status_text.text("Rendering neural video... (this may take ~30-60s)")
+            time.sleep(5)
+            progress_bar.progress(50)
             
-            # Display Results
-            st.subheader("Inference Result")
-            
-            # 1. Visual JSON
-            st.json(data)
-            
-            # 2. Gloss View
-            gloss_sequence = [item['sign_id'] for item in data.get('isl_sequence', [])]
-            st.success(f"ISL GLOSS: {' → '.join(gloss_sequence)}")
-            
-            # 3. Video Render (Optional)
-            if google_key and data.get("rendering_prompt"):
-                st.divider()
-                st.write("🎬 **Video Production Node (Google Veo)**")
-                st.info("Video generation requires a whitelisted Google Vertex AI Project.")
-                # (Video logic placeholder - usually requires Cloud bucket storage for Streamlit)
+        progress_bar.progress(100)
+        
+        if operation.result:
+            return operation.result # Returns the video resource/URL
         else:
-            status.update(label="Failed", state="error")
+            st.error("Video generation completed but returned no result.")
+            return None
+            
+    except Exception as e:
+        st.error(f"Video Generation Error: {e}")
+        return None
 
-elif process_btn and not groq_key:
-    st.warning("Please enter your GROQ API Key in the sidebar.")
+# --- 3. MAIN UI FLOW ---
+
+st.title("🗣️ SignSpeak: Voice-to-Video")
+st.caption("Powered by Groq Whisper, Llama 3, and Google Veo")
+
+# A. VOICE INPUT
+st.subheader("1. Voice Input")
+audio_value = st.audio_input("Record your command")
+
+if audio_value and groq_key:
+    client = Groq(api_key=groq_key)
+    
+    # B. PROCESS PIPELINE
+    with st.spinner("🎧 Transcribing audio..."):
+        # 1. Transcribe
+        transcribed_text = transcribe_audio(client, audio_value.read())
+    
+    if transcribed_text:
+        st.success(f"You said: \"{transcribed_text}\"")
+        
+        with st.spinner("🧠 Converting to ISL Structure..."):
+            # 2. Reason
+            isl_data = get_isl_instructions(client, transcribed_text)
+            
+        if isl_data:
+            # Display Logic
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("2. ISL Logic")
+                st.json(isl_data)
+                st.info(f"GLOSS: {isl_data.get('isl_gloss')}")
+            
+            with col2:
+                st.subheader("3. Video Output")
+                render_prompt = isl_data.get('rendering_prompt')
+                
+                # 3. Generate Video
+                if st.button("🎬 Generate AI Video", type="primary"):
+                    if render_prompt:
+                        video_result = generate_video(render_prompt)
+                        if video_result:
+                            st.video(video_result.video.uri)
+                            st.success("Video Generated Successfully!")
+                    else:
+                        st.warning("No rendering prompt available.")
