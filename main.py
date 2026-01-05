@@ -1,4 +1,4 @@
-pip install groq
+
 import os
 import json
 from groq import Groq
