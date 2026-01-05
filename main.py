@@ -4,33 +4,33 @@ import json
 import time
 import tempfile
 from groq import Groq
-from google import genai  # <--- New Library Import
+import replicate
 
 # Page Config
-st.set_page_config(page_title="SignSpeak AI", page_icon="👋", layout="wide")
+st.set_page_config(page_title="SignSpeak AI (Replicate)", page_icon="👋", layout="wide")
 
 # --- CSS Styling ---
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; color: white; }
-    .stButton > button { background-color: #ff4b4b; color: white; border-radius: 8px; }
+    .stButton > button { background-color: #00bf72; color: white; border-radius: 8px; }
     .stAudio { width: 100%; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- 1. SETUP KEYS ---
 groq_key = os.environ.get("GROQ_API_KEY")
-google_key = os.environ.get("GOOGLE_API_KEY")
+replicate_key = os.environ.get("REPLICATE_API_TOKEN")
 
 with st.sidebar:
     st.header("🔑 Configuration")
     if not groq_key:
         groq_key = st.text_input("Groq API Key", type="password")
-    if not google_key:
-        google_key = st.text_input("Google API Key", type="password")
+    if not replicate_key:
+        replicate_key = st.text_input("Replicate API Token", type="password", help="Get this from replicate.com/account")
     
     st.divider()
-    st.info("Status: Ready to Process")
+    st.info("System: Replicate (Minimax) Node")
 
 # --- 2. AI MODULES ---
 
@@ -81,52 +81,37 @@ def get_isl_instructions(client, text):
         return None
 
 def generate_video(prompt):
-    """Module 3: VISION (Google Veo via New SDK)"""
-    if not google_key:
-        st.warning("Google API Key required for video generation.")
+    """Module 3: VISION (Replicate - Minimax)"""
+    if not replicate_key:
+        st.warning("Replicate API Token required for video.")
         return None
-        
+    
+    # Set the token in environment for the library to pick up
+    os.environ["REPLICATE_API_TOKEN"] = replicate_key
+
     try:
-        # NEW SDK SETUP
-        client = genai.Client(api_key=google_key)
+        st.write("🎞️ Rendering with **Minimax** (via Replicate)...")
         
-        st.write("🎞️ Requesting video from Veo...")
-        
-        # Correct method for the new SDK
-        operation = client.models.generate_videos(
-            model="veo-3.1-generate-preview",
-            prompt=prompt,
-            config={'number_of_videos': 1, 'aspect_ratio': '16:9'}
+        # We use Minimax because it currently has SOTA motion for human subjects
+        output = replicate.run(
+            "minimax/video-01",
+            input={
+                "prompt": prompt,
+                "prompt_optimizer": True
+            }
         )
         
-        # Polling loop
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        while not operation.done:
-            status_text.text("Rendering neural video... (this takes ~30-60s)")
-            time.sleep(5)
-            progress_bar.progress(50)
-            # In the new SDK, we re-fetch the operation status
-            operation = client.operations.get(operation)
-            
-        progress_bar.progress(100)
-        
-        if operation.result and operation.result.generated_videos:
-            # The new SDK returns a structure we can access directly
-            return operation.result.generated_videos[0].video.uri
-        else:
-            st.error("Video generation finished but returned no content.")
-            return None
-            
+        # Replicate returns the URL directly (or a FileOutput object acting as a string)
+        return str(output)
+
     except Exception as e:
-        st.error(f"Video Generation Error: {e}")
+        st.error(f"Replicate Error: {e}")
         return None
 
 # --- 3. MAIN UI FLOW ---
 
-st.title("🗣️ SignSpeak: Voice-to-Video")
-st.caption("Powered by Groq Whisper, Llama 3, and Google Veo")
+st.title("🗣️ SignSpeak: Replicate Edition")
+st.caption("Powered by Groq Whisper, Llama 3, and Minimax")
 
 st.subheader("1. Voice Input")
 audio_value = st.audio_input("Record your command")
@@ -156,7 +141,8 @@ if audio_value and groq_key:
                 
                 if st.button("🎬 Generate AI Video", type="primary"):
                     if render_prompt:
-                        video_uri = generate_video(render_prompt)
-                        if video_uri:
-                            st.video(video_uri)
+                        video_url = generate_video(render_prompt)
+                        if video_url:
+                            st.video(video_url)
                             st.success("Video Generated Successfully!")
+                            st.caption(f"Source: {video_url}")
