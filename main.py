@@ -7,7 +7,7 @@ from groq import Groq
 import replicate
 
 # Page Config
-st.set_page_config(page_title="SignSpeak AI (Replicate)", page_icon="👋", layout="wide")
+st.set_page_config(page_title="SignSpeak AI ", page_icon="👋", layout="wide")
 
 # --- CSS Styling ---
 st.markdown("""
@@ -25,9 +25,9 @@ replicate_key = os.environ.get("REPLICATE_API_TOKEN")
 with st.sidebar:
     st.header("🔑 Configuration")
     if not groq_key:
-        groq_key = st.text_input("Groq API Key", type="password")
+        groq_key = st.text_input("DATABASE API Key", type="password")
     if not replicate_key:
-        replicate_key = st.text_input("Replicate API Token", type="password", help="Get this from replicate.com/account")
+        replicate_key = st.text_input("Authentication API Token", type="password", help="Get this from replicate.com/account")
     
     st.divider()
     st.info("System: Replicate (Minimax) Node")
