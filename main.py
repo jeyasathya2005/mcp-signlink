@@ -15,8 +15,8 @@ st.caption("🎧 Audio → 🧠 ISL → 🎥 AI Video")
 # -------------------------------
 # 🔑 API KEYS (STREAMLIT CLOUD SAFE)
 # -------------------------------
-groq_key = st.secrets.get("GROQ_API_KEY", None)
-replicate_key = st.secrets.get("REPLICATE_API_TOKEN", None)
+groq_key = st.secrets.get("DATABASE_API_KEY", None)
+replicate_key = st.secrets.get("MODEL_API_TOKEN", None)
 
 with st.sidebar:
     st.header("🔑 API Status")
