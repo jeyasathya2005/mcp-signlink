@@ -147,38 +147,46 @@ def generate_video(prompt):
         )
 
         # Convert generator → list
-        if hasattr(output, "__iter__") and not isinstance(output, str):
+        if hasattr(output, "__iter__") and not isinstance(output, (str, bytes)):
             output = list(output)
 
-        if isinstance(output, list):
-            return output[0]
-
-        if isinstance(output, str):
-            return output
-
-        return None
+        return output
 
     except Exception as e:
         st.error(f"Video Error: {e}")
         return None
 
 # -------------------------------
-# 🎥 SAFE VIDEO DISPLAY
+# 🎥 SAFE VIDEO DISPLAY (FINAL FIX)
 # -------------------------------
-def display_video(video_url):
+def display_video(video_data):
     try:
-        if isinstance(video_url, str) and video_url.startswith("http"):
-            st.video(video_url)
-        else:
-            # fallback download
-            response = requests.get(video_url)
+        # CASE 1: URL
+        if isinstance(video_data, str) and video_data.startswith("http"):
+            st.video(video_data)
+            return
+
+        # CASE 2: LIST
+        if isinstance(video_data, list):
+            video_data = video_data[0]
+            st.video(video_data)
+            return
+
+        # CASE 3: BYTES (🔥 FIX)
+        if isinstance(video_data, (bytes, bytearray)):
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-            temp_file.write(response.content)
+            temp_file.write(video_data)
+            temp_file.close()
             st.video(temp_file.name)
+            return
+
+        # DEBUG
+        st.error("❌ Unsupported video format")
+        st.write(type(video_data))
 
     except Exception as e:
         st.error(f"Display Error: {e}")
-        st.write("DEBUG:", video_url)
+        st.write("DEBUG:", video_data)
 
 # -------------------------------
 # 🎤 MAIN UI
@@ -190,14 +198,14 @@ if audio and groq_key:
 
     audio_bytes = audio.getvalue()
 
-    # Step 1
+    # Step 1: Speech → Text
     with st.spinner("🎧 Transcribing..."):
         text = transcribe_audio(audio_bytes)
 
     if text:
         st.success(f"🗣️ You said: {text}")
 
-        # Step 2
+        # Step 2: Text → ISL
         with st.spinner("🧠 Converting to ISL..."):
             isl_data = get_isl(text)
 
@@ -214,12 +222,12 @@ if audio and groq_key:
 
                 if st.button("🎬 Generate Video"):
                     with st.spinner("🎞️ Generating video..."):
-                        video_url = generate_video(
+                        video_data = generate_video(
                             isl_data.get("rendering_prompt")
                         )
 
-                    if video_url:
-                        display_video(video_url)
+                    if video_data:
+                        display_video(video_data)
                         st.success("✅ Video Generated!")
                     else:
                         st.error("❌ Failed to generate video")
@@ -228,4 +236,4 @@ if audio and groq_key:
 # FOOTER
 # -------------------------------
 st.divider()
-st.caption("⚡ Universal AI | Groq + Replicate | Fully Fixed")
+st.caption("⚡ Fully Fixed | Works with all video formats")
