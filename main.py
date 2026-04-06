@@ -8,31 +8,40 @@ import replicate
 # 🌐 PAGE CONFIG
 # -------------------------------
 st.set_page_config(page_title="SignSpeak AI 👋", layout="wide")
-
-st.title("🗣️ SignSpeak AI")
-st.caption("🎧 Audio → 🧠 ISL → 🎥 AI Video")
+st.title("🗣️ SignSpeak AI (Universal)")
+st.caption("🎧 Audio → 🧠 ISL → 🎥 Video | Multi-Model Support")
 
 # -------------------------------
-# 🔑 API KEYS (STREAMLIT CLOUD SAFE)
+# 🔑 API KEYS
 # -------------------------------
-groq_key = st.secrets.get("GROQ_API_KEY", None)
-replicate_key = st.secrets.get("REPLICATE_API_TOKEN", None)
+groq_key = st.secrets.get("GROQ_API_KEY", "")
+replicate_key = st.secrets.get("REPLICATE_API_TOKEN", "")
 
 with st.sidebar:
-    st.header("🔑 API Status")
+    st.header("🔑 API Config")
 
-    if groq_key:
-        st.success("Groq Connected ✅")
-    else:
-        groq_key = st.text_input("Enter Database API Key", type="password")
+    if not groq_key:
+        groq_key = st.text_input("Groq API Key", type="password")
 
-    if replicate_key:
-        st.success("Replicate Connected ✅")
-    else:
-        replicate_key = st.text_input("Enter Model Token", type="password")
+    if not replicate_key:
+        replicate_key = st.text_input("Replicate Token", type="password")
+
+    st.divider()
+
+    # -------------------------------
+    # 🧠 MODEL SELECTION
+    # -------------------------------
+    MODEL_OPTIONS = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it"
+    ]
+
+    selected_model = st.selectbox("🧠 Select Model", MODEL_OPTIONS)
 
 # -------------------------------
-# 🎧 AUDIO → TEXT (WHISPER)
+# 🎧 AUDIO → TEXT
 # -------------------------------
 def transcribe_audio(audio_bytes):
     try:
@@ -60,9 +69,35 @@ def transcribe_audio(audio_bytes):
         return None
 
 # -------------------------------
-# 🧠 TEXT → ISL (LLAMA)
+# 🌐 UNIVERSAL LLM CALL
+# -------------------------------
+def call_llm(model, messages):
+
+    url = "https://api.groq.com/openai/v1/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {groq_key}",
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.2
+    }
+
+    response = requests.post(url, headers=headers, json=data)
+
+    if response.status_code != 200:
+        return None
+
+    return response.json()["choices"][0]["message"]["content"]
+
+# -------------------------------
+# 🧠 TEXT → ISL (WITH FALLBACK)
 # -------------------------------
 def get_isl(text):
+
     system_prompt = """
     Convert English sentence to Indian Sign Language (ISL).
 
@@ -74,39 +109,37 @@ def get_isl(text):
     }
     """
 
-    try:
-        url = "https://api.groq.com/openai/v1/chat/completions"
+    MODELS = [
+        selected_model,
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768"
+    ]
 
-        headers = {
-            "Authorization": f"Bearer {groq_key}",
-            "Content-Type": "application/json"
-        }
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": text}
+    ]
 
-        data = {
-            "model": "llama3-70b-8192",
-            "temperature": 0.2,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": text}
-            ]
-        }
+    for model in MODELS:
+        try:
+            result = call_llm(model, messages)
 
-        response = requests.post(url, headers=headers, json=data)
+            if not result:
+                continue
 
-        if response.status_code != 200:
-            st.error(response.text)
-            return None
+            # Clean JSON
+            result = result.strip().replace("```json", "").replace("```", "")
 
-        content = response.json()["choices"][0]["message"]["content"]
+            st.success(f"✅ Model used: {model}")
 
-        # CLEAN JSON
-        content = content.strip().replace("```json", "").replace("```", "")
+            return json.loads(result)
 
-        return json.loads(content)
+        except:
+            continue
 
-    except Exception as e:
-        st.error(f"ISL Error: {e}")
-        return None
+    st.error("❌ All models failed")
+    return None
 
 # -------------------------------
 # 🎥 VIDEO GENERATION
@@ -123,9 +156,9 @@ def generate_video(prompt):
             }
         )
 
-        # Handle list output
         if isinstance(output, list):
             return output[0]
+
         return output
 
     except Exception as e:
@@ -133,39 +166,36 @@ def generate_video(prompt):
         return None
 
 # -------------------------------
-# 🎤 MAIN FLOW
+# 🎤 MAIN UI
 # -------------------------------
 st.subheader("🎤 Record Voice")
-
-audio = st.audio_input("Speak now")
+audio = st.audio_input("Speak something")
 
 if audio and groq_key:
 
     audio_bytes = audio.getvalue()
 
-    # Step 1: Transcription
+    # Step 1: Speech → Text
     with st.spinner("🎧 Transcribing..."):
         text = transcribe_audio(audio_bytes)
 
     if text:
         st.success(f"🗣️ You said: {text}")
 
-        # Step 2: ISL Conversion
+        # Step 2: Text → ISL
         with st.spinner("🧠 Converting to ISL..."):
             isl_data = get_isl(text)
 
         if isl_data:
             col1, col2 = st.columns(2)
 
-            # LEFT: JSON
             with col1:
                 st.subheader("📘 ISL Output")
                 st.json(isl_data)
                 st.info(f"GLOSS: {isl_data.get('isl_gloss')}")
 
-            # RIGHT: VIDEO
             with col2:
-                st.subheader("🎥 AI Video")
+                st.subheader("🎥 Video Output")
 
                 if st.button("🎬 Generate Video"):
                     video_url = generate_video(
@@ -174,10 +204,10 @@ if audio and groq_key:
 
                     if video_url:
                         st.video(video_url)
-                        st.success("✅ Video Ready!")
+                        st.success("✅ Video Generated!")
 
 # -------------------------------
 # FOOTER
 # -------------------------------
 st.divider()
-st.caption("Built with ❤️ using Streamlit + Groq + Replicate")
+st.caption("⚡ Universal AI System | Groq + Multi-Model + Replicate")
