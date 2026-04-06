@@ -15,8 +15,8 @@ st.caption("🎧 Audio → 🧠 ISL → 🎥 AI Video")
 # -------------------------------
 # 🔑 API KEYS (STREAMLIT CLOUD SAFE)
 # -------------------------------
-groq_key = st.secrets.get("DATABASE_API_KEY", None)
-replicate_key = st.secrets.get("MODEL_API_TOKEN", None)
+groq_key = st.secrets.get("GROQ_API_KEY", None)
+replicate_key = st.secrets.get("REPLICATE_API_TOKEN", None)
 
 with st.sidebar:
     st.header("🔑 API Status")
@@ -24,12 +24,12 @@ with st.sidebar:
     if groq_key:
         st.success("Groq Connected ✅")
     else:
-        groq_key = st.text_input("Enter GROQ API Key", type="password")
+        groq_key = st.text_input("Enter Database API Key", type="password")
 
     if replicate_key:
         st.success("Replicate Connected ✅")
     else:
-        replicate_key = st.text_input("Enter Replicate Token", type="password")
+        replicate_key = st.text_input("Enter Model Token", type="password")
 
 # -------------------------------
 # 🎧 AUDIO → TEXT (WHISPER)
