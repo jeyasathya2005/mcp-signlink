@@ -3,13 +3,14 @@ import os
 import json
 import requests
 import replicate
+import tempfile
 
 # -------------------------------
 # 🌐 PAGE CONFIG
 # -------------------------------
 st.set_page_config(page_title="SignSpeak AI 👋", layout="wide")
 st.title("🗣️ SignSpeak AI (Universal)")
-st.caption("🎧 Audio → 🧠 ISL → 🎥 Video | Multi-Model Support")
+st.caption("🎧 Audio → 🧠 ISL → 🎥 Video")
 
 # -------------------------------
 # 🔑 API KEYS
@@ -28,9 +29,6 @@ with st.sidebar:
 
     st.divider()
 
-    # -------------------------------
-    # 🧠 MODEL SELECTION
-    # -------------------------------
     MODEL_OPTIONS = [
         "llama-3.3-70b-versatile",
         "llama-3.1-8b-instant",
@@ -47,9 +45,7 @@ def transcribe_audio(audio_bytes):
     try:
         url = "https://api.groq.com/openai/v1/audio/transcriptions"
 
-        headers = {
-            "Authorization": f"Bearer {groq_key}"
-        }
+        headers = {"Authorization": f"Bearer {groq_key}"}
 
         files = {
             "file": ("audio.wav", audio_bytes, "audio/wav"),
@@ -72,7 +68,6 @@ def transcribe_audio(audio_bytes):
 # 🌐 UNIVERSAL LLM CALL
 # -------------------------------
 def call_llm(model, messages):
-
     url = "https://api.groq.com/openai/v1/chat/completions"
 
     headers = {
@@ -97,7 +92,6 @@ def call_llm(model, messages):
 # 🧠 TEXT → ISL (WITH FALLBACK)
 # -------------------------------
 def get_isl(text):
-
     system_prompt = """
     Convert English sentence to Indian Sign Language (ISL).
 
@@ -128,11 +122,7 @@ def get_isl(text):
             if not result:
                 continue
 
-            # Clean JSON
             result = result.strip().replace("```json", "").replace("```", "")
-
-            st.success(f"✅ Model used: {model}")
-
             return json.loads(result)
 
         except:
@@ -142,7 +132,7 @@ def get_isl(text):
     return None
 
 # -------------------------------
-# 🎥 VIDEO GENERATION
+# 🎥 VIDEO GENERATION (FIXED)
 # -------------------------------
 def generate_video(prompt):
     try:
@@ -156,14 +146,39 @@ def generate_video(prompt):
             }
         )
 
+        # Convert generator → list
+        if hasattr(output, "__iter__") and not isinstance(output, str):
+            output = list(output)
+
         if isinstance(output, list):
             return output[0]
 
-        return output
+        if isinstance(output, str):
+            return output
+
+        return None
 
     except Exception as e:
         st.error(f"Video Error: {e}")
         return None
+
+# -------------------------------
+# 🎥 SAFE VIDEO DISPLAY
+# -------------------------------
+def display_video(video_url):
+    try:
+        if isinstance(video_url, str) and video_url.startswith("http"):
+            st.video(video_url)
+        else:
+            # fallback download
+            response = requests.get(video_url)
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+            temp_file.write(response.content)
+            st.video(temp_file.name)
+
+    except Exception as e:
+        st.error(f"Display Error: {e}")
+        st.write("DEBUG:", video_url)
 
 # -------------------------------
 # 🎤 MAIN UI
@@ -175,14 +190,14 @@ if audio and groq_key:
 
     audio_bytes = audio.getvalue()
 
-    # Step 1: Speech → Text
+    # Step 1
     with st.spinner("🎧 Transcribing..."):
         text = transcribe_audio(audio_bytes)
 
     if text:
         st.success(f"🗣️ You said: {text}")
 
-        # Step 2: Text → ISL
+        # Step 2
         with st.spinner("🧠 Converting to ISL..."):
             isl_data = get_isl(text)
 
@@ -198,16 +213,19 @@ if audio and groq_key:
                 st.subheader("🎥 Video Output")
 
                 if st.button("🎬 Generate Video"):
-                    video_url = generate_video(
-                        isl_data.get("rendering_prompt")
-                    )
+                    with st.spinner("🎞️ Generating video..."):
+                        video_url = generate_video(
+                            isl_data.get("rendering_prompt")
+                        )
 
                     if video_url:
-                        st.video(video_url)
+                        display_video(video_url)
                         st.success("✅ Video Generated!")
+                    else:
+                        st.error("❌ Failed to generate video")
 
 # -------------------------------
 # FOOTER
 # -------------------------------
 st.divider()
-st.caption("⚡ Universal AI System | Groq + Multi-Model + Replicate")
+st.caption("⚡ Universal AI | Groq + Replicate | Fully Fixed")
