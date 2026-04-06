@@ -1,39 +1,38 @@
 import streamlit as st
 import os
 import json
-import time
-import tempfile
 import requests
 import replicate
 
-# Page Config
-st.set_page_config(page_title="SignSpeak AI ", page_icon="👋", layout="wide")
+# -------------------------------
+# 🌐 PAGE CONFIG
+# -------------------------------
+st.set_page_config(page_title="SignSpeak AI 👋", layout="wide")
 
-# --- CSS Styling ---
-st.markdown("""
-<style>
-    .stApp { background-color: #0e1117; color: white; }
-    .stButton > button { background-color: #00bf72; color: white; border-radius: 8px; }
-    .stAudio { width: 100%; }
-</style>
-""", unsafe_allow_html=True)
-
-# --- 1. SETUP KEYS ---
-groq_key = os.environ.get("GROQ_API_KEY")
-replicate_key = os.environ.get("REPLICATE_API_TOKEN")
-
-with st.sidebar:
-    st.header("🔑 Configuration")
-    if not groq_key:
-        groq_key = st.text_input("DATABASE API Key", type="password")
-    if not replicate_key:
-        replicate_key = st.text_input("Authentication API Token", type="password")
-
-    st.divider()
-    st.info("System: Replicate (Minimax) Node")
+st.title("🗣️ SignSpeak AI")
+st.caption("🎧 Audio → 🧠 ISL → 🎥 AI Video")
 
 # -------------------------------
-# 🎧 MODULE 1: AUDIO → TEXT
+# 🔑 API KEYS (STREAMLIT CLOUD SAFE)
+# -------------------------------
+groq_key = st.secrets.get("GROQ_API_KEY", None)
+replicate_key = st.secrets.get("REPLICATE_API_TOKEN", None)
+
+with st.sidebar:
+    st.header("🔑 API Status")
+
+    if groq_key:
+        st.success("Groq Connected ✅")
+    else:
+        groq_key = st.text_input("Enter GROQ API Key", type="password")
+
+    if replicate_key:
+        st.success("Replicate Connected ✅")
+    else:
+        replicate_key = st.text_input("Enter Replicate Token", type="password")
+
+# -------------------------------
+# 🎧 AUDIO → TEXT (WHISPER)
 # -------------------------------
 def transcribe_audio(audio_bytes):
     try:
@@ -44,26 +43,30 @@ def transcribe_audio(audio_bytes):
         }
 
         files = {
-            "file": ("audio.wav", audio_bytes),
+            "file": ("audio.wav", audio_bytes, "audio/wav"),
             "model": (None, "whisper-large-v3")
         }
 
         response = requests.post(url, headers=headers, files=files)
-        result = response.json()
 
-        return result.get("text", "")
+        if response.status_code != 200:
+            st.error(response.text)
+            return None
+
+        return response.json().get("text", "")
 
     except Exception as e:
         st.error(f"Transcription Error: {e}")
         return None
 
 # -------------------------------
-# 🧠 MODULE 2: TEXT → ISL LOGIC
+# 🧠 TEXT → ISL (LLAMA)
 # -------------------------------
-def get_isl_instructions(text):
+def get_isl(text):
     system_prompt = """
-    You are the SignSpeak Engine. Convert spoken English to Indian Sign Language (ISL).
-    Output JSON only:
+    Convert English sentence to Indian Sign Language (ISL).
+
+    Respond ONLY in JSON:
     {
       "spoken_text": "",
       "isl_gloss": "",
@@ -81,6 +84,7 @@ def get_isl_instructions(text):
 
         data = {
             "model": "llama3-70b-8192",
+            "temperature": 0.2,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": text}
@@ -88,28 +92,28 @@ def get_isl_instructions(text):
         }
 
         response = requests.post(url, headers=headers, json=data)
-        result = response.json()
 
-        content = result["choices"][0]["message"]["content"]
+        if response.status_code != 200:
+            st.error(response.text)
+            return None
+
+        content = response.json()["choices"][0]["message"]["content"]
+
+        # CLEAN JSON
+        content = content.strip().replace("```json", "").replace("```", "")
 
         return json.loads(content)
 
     except Exception as e:
-        st.error(f"Reasoning Error: {e}")
+        st.error(f"ISL Error: {e}")
         return None
 
 # -------------------------------
-# 🎥 MODULE 3: VIDEO GENERATION
+# 🎥 VIDEO GENERATION
 # -------------------------------
 def generate_video(prompt):
-    if not replicate_key:
-        st.warning("Replicate API Token required")
-        return None
-
-    os.environ["REPLICATE_API_TOKEN"] = replicate_key
-
     try:
-        st.write("🎞️ Generating Video...")
+        os.environ["REPLICATE_API_TOKEN"] = replicate_key
 
         output = replicate.run(
             "minimax/video-01",
@@ -119,47 +123,61 @@ def generate_video(prompt):
             }
         )
 
-        return str(output)
+        # Handle list output
+        if isinstance(output, list):
+            return output[0]
+        return output
 
     except Exception as e:
-        st.error(f"Replicate Error: {e}")
+        st.error(f"Video Error: {e}")
         return None
 
 # -------------------------------
-# 🌐 MAIN UI
+# 🎤 MAIN FLOW
 # -------------------------------
-st.title("🗣️ SignSpeak: Replicate Edition")
-st.caption("Groq Whisper + LLaMA + Minimax Video")
+st.subheader("🎤 Record Voice")
 
-st.subheader("1. Voice Input")
-audio_value = st.audio_input("Record your command")
+audio = st.audio_input("Speak now")
 
-if audio_value and groq_key:
+if audio and groq_key:
 
-    with st.spinner("🎧 Transcribing audio..."):
-        transcribed_text = transcribe_audio(audio_value.read())
+    audio_bytes = audio.getvalue()
 
-    if transcribed_text:
-        st.success(f"You said: \"{transcribed_text}\"")
+    # Step 1: Transcription
+    with st.spinner("🎧 Transcribing..."):
+        text = transcribe_audio(audio_bytes)
 
+    if text:
+        st.success(f"🗣️ You said: {text}")
+
+        # Step 2: ISL Conversion
         with st.spinner("🧠 Converting to ISL..."):
-            isl_data = get_isl_instructions(transcribed_text)
+            isl_data = get_isl(text)
 
         if isl_data:
             col1, col2 = st.columns(2)
 
+            # LEFT: JSON
             with col1:
-                st.subheader("2. ISL Logic")
+                st.subheader("📘 ISL Output")
                 st.json(isl_data)
                 st.info(f"GLOSS: {isl_data.get('isl_gloss')}")
 
+            # RIGHT: VIDEO
             with col2:
-                st.subheader("3. Video Output")
-                prompt = isl_data.get("rendering_prompt")
+                st.subheader("🎥 AI Video")
 
-                if st.button("🎬 Generate AI Video"):
-                    video_url = generate_video(prompt)
+                if st.button("🎬 Generate Video"):
+                    video_url = generate_video(
+                        isl_data.get("rendering_prompt")
+                    )
 
                     if video_url:
                         st.video(video_url)
-                        st.success("Video Generated Successfully!")
+                        st.success("✅ Video Ready!")
+
+# -------------------------------
+# FOOTER
+# -------------------------------
+st.divider()
+st.caption("Built with ❤️ using Streamlit + Groq + Replicate")
