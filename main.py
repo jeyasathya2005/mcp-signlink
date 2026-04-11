@@ -3,7 +3,7 @@ import os
 import json
 import requests
 import replicate
-from replicate.client import Client # Import explicit Client
+from replicate.client import Client
 import tempfile
 
 # -------------------------------
@@ -14,14 +14,18 @@ st.title("🗣️ SignSpeak AI (Universal)")
 st.caption("🎧 Audio → 🧠 ISL → 🎥 Video")
 
 # -------------------------------
-# 🔑 API KEYS & SESSION STATE
+# 🔑 SESSION STATE INITIALIZATION
 # -------------------------------
-# Use session state to store results so they don't disappear on button clicks
 if "isl_data" not in st.session_state:
     st.session_state.isl_data = None
 if "transcription" not in st.session_state:
     st.session_state.transcription = None
+if "video_url" not in st.session_state:
+    st.session_state.video_url = None
 
+# -------------------------------
+# 🔑 SIDEBAR CONFIG
+# -------------------------------
 groq_key = st.secrets.get("GROQ_API_KEY", "")
 replicate_token = st.secrets.get("REPLICATE_API_TOKEN", "")
 
@@ -33,92 +37,49 @@ with st.sidebar:
         replicate_token = st.text_input("Replicate Token", type="password")
 
     st.divider()
-    MODEL_OPTIONS = [
-        "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant",
-        "mixtral-8x7b-32768",
-        "gemma2-9b-it"
-    ]
+    MODEL_OPTIONS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"]
     selected_model = st.selectbox("🧠 Select Model", MODEL_OPTIONS)
 
 # -------------------------------
-# 🎧 AUDIO → TEXT
+# 🎧 FUNCTIONS
 # -------------------------------
 def transcribe_audio(audio_bytes):
     try:
         url = "https://api.groq.com/openai/v1/audio/transcriptions"
         headers = {"Authorization": f"Bearer {groq_key}"}
-        files = {
-            "file": ("audio.wav", audio_bytes, "audio/wav"),
-            "model": (None, "whisper-large-v3")
-        }
+        files = {"file": ("audio.wav", audio_bytes, "audio/wav"), "model": (None, "whisper-large-v3")}
         response = requests.post(url, headers=headers, files=files)
-        if response.status_code != 200:
-            st.error(f"Transcription Error: {response.text}")
-            return None
-        return response.json().get("text", "")
+        return response.json().get("text", "") if response.status_code == 200 else None
     except Exception as e:
-        st.error(f"Transcription Exception: {e}")
+        st.error(f"Transcription Error: {e}")
         return None
 
-# -------------------------------
-# 🧠 TEXT → ISL
-# -------------------------------
-def call_llm(model, messages):
+def get_isl(text):
+    system_prompt = 'Convert English to Indian Sign Language. Respond ONLY in JSON: {"spoken_text": "", "isl_gloss": "", "rendering_prompt": ""}'
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-    data = {"model": model, "messages": messages, "temperature": 0.2}
-    response = requests.post(url, headers=headers, json=data)
-    return response.json()["choices"][0]["message"]["content"] if response.status_code == 200 else None
-
-def get_isl(text):
-    system_prompt = """Convert English to Indian Sign Language. Respond ONLY in JSON:
-    {"spoken_text": "", "isl_gloss": "", "rendering_prompt": ""}"""
-    
-    messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": text}]
-    
+    data = {"model": selected_model, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": text}], "temperature": 0.2}
     try:
-        result = call_llm(selected_model, messages)
-        if result:
-            result = result.strip().replace("```json", "").replace("```", "")
-            return json.loads(result)
+        response = requests.post(url, headers=headers, json=data)
+        res_text = response.json()["choices"][0]["message"]["content"]
+        return json.loads(res_text.strip().replace("```json", "").replace("```", ""))
     except Exception as e:
         st.error(f"LLM Error: {e}")
-    return None
+        return None
 
-# -------------------------------
-# 🎥 VIDEO GENERATION (FIXED AUTH)
-# -------------------------------
 def generate_video(prompt, token):
     try:
-        # FIX: Initialize an explicit client with the token
         client = Client(api_token=token)
+        # minimax/video-01 returns a URL or a generator yielding a URL
+        output = client.run("minimax/video-01", input={"prompt": prompt, "prompt_optimizer": True})
         
-        # Use the client instance instead of the global replicate.run
-        output = client.run(
-            "minimax/video-01",
-            input={
-                "prompt": prompt,
-                "prompt_optimizer": True
-            }
-        )
+        # Ensure we get the actual URL string
+        if isinstance(output, list):
+            return output[0]
         return output
     except Exception as e:
         st.error(f"Replicate Error: {e}")
         return None
-
-def display_video(video_data):
-    try:
-        if isinstance(video_data, str) and video_data.startswith("http"):
-            st.video(video_data)
-        elif isinstance(video_data, list):
-            st.video(video_data[0])
-        elif isinstance(video_data, (bytes, bytearray)):
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-                tmp.write(video_data)
-                st.video(tmp.name)
-    except Exception as e:
-        st.error(f"Display Error: {e}")
 
 # -------------------------------
 # 🎤 MAIN UI
@@ -126,42 +87,48 @@ def display_video(video_data):
 st.subheader("🎤 Record Voice")
 audio = st.audio_input("Speak something")
 
-# Process audio only if it's new
-if audio and groq_key:
+# Clear state if a NEW audio is recorded
+if audio:
+    audio_bytes = audio.getvalue()
     if st.session_state.transcription is None:
         with st.spinner("🎧 Transcribing..."):
-            st.session_state.transcription = transcribe_audio(audio.getvalue())
-        
+            st.session_state.transcription = transcribe_audio(audio_bytes)
         if st.session_state.transcription:
             with st.spinner("🧠 Converting to ISL..."):
                 st.session_state.isl_data = get_isl(st.session_state.transcription)
 
-# Display Results
+# --- DISPLAY AREA ---
 if st.session_state.transcription:
     st.success(f"🗣️ You said: {st.session_state.transcription}")
 
-    if st.session_state.isl_data:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("📘 ISL Output")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("📘 ISL Output")
+        if st.session_state.isl_data:
             st.json(st.session_state.isl_data)
             st.info(f"GLOSS: {st.session_state.isl_data.get('isl_gloss')}")
 
-        with col2:
-            st.subheader("🎥 Video Output")
+    with col2:
+        st.subheader("🎥 Video Output")
+        
+        # 1. Video Generation Button
+        if st.button("🎬 Generate Video"):
             if not replicate_token:
-                st.warning("Please enter your Replicate Token in the sidebar.")
+                st.error("Please enter Replicate Token in sidebar.")
             else:
-                if st.button("🎬 Generate Video"):
-                    with st.spinner("🎞️ Generating video..."):
-                        video_data = generate_video(
-                            st.session_state.isl_data.get("rendering_prompt"),
-                            replicate_token
-                        )
-                        if video_data:
-                            display_video(video_data)
-                            st.success("✅ Video Generated!")
+                with st.spinner("🎞️ Generating video (usually takes 30-60s)..."):
+                    video_res = generate_video(st.session_state.isl_data.get("rendering_prompt"), replicate_token)
+                    if video_res:
+                        st.session_state.video_url = video_res # Save to state!
+                    else:
+                        st.error("Generation failed. Check your Replicate balance/token.")
+
+        # 2. Permanent Video Display (Visible after generation)
+        if st.session_state.video_url:
+            st.video(st.session_state.video_url)
+            st.success("✅ Video Ready!")
+            st.write(f"[Direct Video Link]({st.session_state.video_url})")
 
 st.divider()
-st.caption("⚡ Fixed Authentication & State Handling")
+st.caption("⚡ Fixed Video Persistence and State Management")
