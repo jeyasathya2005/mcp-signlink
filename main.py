@@ -4,7 +4,7 @@ import json
 import requests
 import replicate
 from replicate.client import Client
-import tempfile
+import time
 
 # -------------------------------
 # 🌐 PAGE CONFIG
@@ -37,8 +37,14 @@ with st.sidebar:
         replicate_token = st.text_input("Replicate Token", type="password")
 
     st.divider()
-    MODEL_OPTIONS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"]
+    MODEL_OPTIONS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"]
     selected_model = st.selectbox("🧠 Select Model", MODEL_OPTIONS)
+    
+    if st.button("🗑️ Clear Cache"):
+        st.session_state.transcription = None
+        st.session_state.isl_data = None
+        st.session_state.video_url = None
+        st.rerun()
 
 # -------------------------------
 # 🎧 FUNCTIONS
@@ -49,20 +55,40 @@ def transcribe_audio(audio_bytes):
         headers = {"Authorization": f"Bearer {groq_key}"}
         files = {"file": ("audio.wav", audio_bytes, "audio/wav"), "model": (None, "whisper-large-v3")}
         response = requests.post(url, headers=headers, files=files)
-        return response.json().get("text", "") if response.status_code == 200 else None
+        if response.status_code == 200:
+            return response.json().get("text", "")
+        return None
     except Exception as e:
         st.error(f"Transcription Error: {e}")
         return None
 
 def get_isl(text):
-    system_prompt = 'Convert English to Indian Sign Language. Respond ONLY in JSON: {"spoken_text": "", "isl_gloss": "", "rendering_prompt": ""}'
+    # Updated system prompt to ensure the video model gets a RICH visual description
+    system_prompt = (
+        "Convert English to Indian Sign Language (ISL). "
+        "Respond ONLY in JSON format: "
+        "{"
+        "\"spoken_text\": \"original text\","
+        "\"isl_gloss\": \"UPPERCASE GLOSS SYMBOLS\","
+        "\"rendering_prompt\": \"A high-quality video of a person performing Indian Sign Language for: [Describe the movement in detail here]\""
+        "}"
+    )
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-    data = {"model": selected_model, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": text}], "temperature": 0.2}
+    data = {
+        "model": selected_model, 
+        "messages": [
+            {"role": "system", "content": system_prompt}, 
+            {"role": "user", "content": f"Convert this to ISL: {text}"}
+        ], 
+        "temperature": 0.2
+    }
     try:
         response = requests.post(url, headers=headers, json=data)
         res_text = response.json()["choices"][0]["message"]["content"]
-        return json.loads(res_text.strip().replace("```json", "").replace("```", ""))
+        # Clean potential markdown
+        clean_json = res_text.strip().replace("```json", "").replace("```", "")
+        return json.loads(clean_json)
     except Exception as e:
         st.error(f"LLM Error: {e}")
         return None
@@ -70,10 +96,18 @@ def get_isl(text):
 def generate_video(prompt, token):
     try:
         client = Client(api_token=token)
-        # minimax/video-01 returns a URL or a generator yielding a URL
-        output = client.run("minimax/video-01", input={"prompt": prompt, "prompt_optimizer": True})
+        # We use a more descriptive prompt structure for Minimax
+        full_prompt = f"{prompt}. High quality, 4k, realistic person, neutral background, clear hand gestures."
         
-        # Ensure we get the actual URL string
+        output = client.run(
+            "minimax/video-01",
+            input={
+                "prompt": full_prompt,
+                "prompt_optimizer": True
+            }
+        )
+        
+        # Minimax returns a URL string or a list containing the URL
         if isinstance(output, list):
             return output[0]
         return output
@@ -84,51 +118,59 @@ def generate_video(prompt, token):
 # -------------------------------
 # 🎤 MAIN UI
 # -------------------------------
-st.subheader("🎤 Record Voice")
+st.subheader("🎤 Step 1: Record Voice")
 audio = st.audio_input("Speak something")
 
-# Clear state if a NEW audio is recorded
+# Logic: If new audio is detected and we haven't processed it yet
 if audio:
-    audio_bytes = audio.getvalue()
+    # Check if this audio is different from what we processed
+    current_audio_bytes = audio.getvalue()
+    
     if st.session_state.transcription is None:
         with st.spinner("🎧 Transcribing..."):
-            st.session_state.transcription = transcribe_audio(audio_bytes)
+            st.session_state.transcription = transcribe_audio(current_audio_bytes)
+        
         if st.session_state.transcription:
-            with st.spinner("🧠 Converting to ISL..."):
+            with st.spinner("🧠 Converting to ISL Gloss..."):
                 st.session_state.isl_data = get_isl(st.session_state.transcription)
+            st.rerun()
 
 # --- DISPLAY AREA ---
 if st.session_state.transcription:
-    st.success(f"🗣️ You said: {st.session_state.transcription}")
+    st.info(f"🗣️ **You said:** {st.session_state.transcription}")
 
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("📘 ISL Output")
+        st.subheader("📘 ISL Interpretation")
         if st.session_state.isl_data:
-            st.json(st.session_state.isl_data)
-            st.info(f"GLOSS: {st.session_state.isl_data.get('isl_gloss')}")
+            st.success(f"**ISL Gloss:** {st.session_state.isl_data.get('isl_gloss')}")
+            with st.expander("View Raw JSON Data"):
+                st.json(st.session_state.isl_data)
 
     with col2:
-        st.subheader("🎥 Video Output")
+        st.subheader("🎥 Video Generation")
         
-        # 1. Video Generation Button
-        if st.button("🎬 Generate Video"):
+        # Generate Video Button
+        if st.button("🎬 Generate Sign Language Video"):
             if not replicate_token:
                 st.error("Please enter Replicate Token in sidebar.")
             else:
-                with st.spinner("🎞️ Generating video (usually takes 30-60s)..."):
-                    video_res = generate_video(st.session_state.isl_data.get("rendering_prompt"), replicate_token)
+                with st.spinner("🎞️ Generating video (Takes ~60 seconds)..."):
+                    video_res = generate_video(
+                        st.session_state.isl_data.get("rendering_prompt"), 
+                        replicate_token
+                    )
                     if video_res:
-                        st.session_state.video_url = video_res # Save to state!
+                        st.session_state.video_url = video_res
+                        st.success("Video Generated Successfully!")
                     else:
-                        st.error("Generation failed. Check your Replicate balance/token.")
+                        st.error("Failed to generate video.")
 
-        # 2. Permanent Video Display (Visible after generation)
+        # Persistent Video Display
         if st.session_state.video_url:
             st.video(st.session_state.video_url)
-            st.success("✅ Video Ready!")
-            st.write(f"[Direct Video Link]({st.session_state.video_url})")
+            st.write(f"🔗 [Download / Direct Link]({st.session_state.video_url})")
 
 st.divider()
-st.caption("⚡ Fixed Video Persistence and State Management")
+st.caption("⚡ Hint: If the video is too short, try speaking a longer sentence. The AI generates based on the visual prompt length.")
