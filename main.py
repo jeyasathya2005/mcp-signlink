@@ -1,176 +1,154 @@
 import streamlit as st
-import os
 import json
 import requests
-import replicate
-from replicate.client import Client
-import time
 
 # -------------------------------
 # 🌐 PAGE CONFIG
 # -------------------------------
-st.set_page_config(page_title="SignSpeak AI 👋", layout="wide")
-st.title("🗣️ SignSpeak AI (Universal)")
-st.caption("🎧 Audio → 🧠 ISL → 🎥 Video")
+st.set_page_config(page_title="SignSpeak Search 👋", layout="wide")
+st.title("🗣️ SignSpeak AI (Video Finder)")
+st.caption("🎧 Audio → 🧠 ISL Gloss → 🔍 Web Video Retrieval")
 
 # -------------------------------
 # 🔑 SESSION STATE INITIALIZATION
 # -------------------------------
-if "isl_data" not in st.session_state:
-    st.session_state.isl_data = None
 if "transcription" not in st.session_state:
     st.session_state.transcription = None
-if "video_url" not in st.session_state:
-    st.session_state.video_url = None
+if "isl_data" not in st.session_state:
+    st.session_state.isl_data = None
+if "video_link" not in st.session_state:
+    st.session_state.video_link = None
 
 # -------------------------------
 # 🔑 SIDEBAR CONFIG
 # -------------------------------
 groq_key = st.secrets.get("GROQ_API_KEY", "")
-replicate_token = st.secrets.get("REPLICATE_API_TOKEN", "")
+google_key = st.secrets.get("GOOGLE_API_KEY", "")
+google_cx = st.secrets.get("GOOGLE_CSE_ID", "")
 
 with st.sidebar:
     st.header("🔑 API Config")
     if not groq_key:
         groq_key = st.text_input("Groq API Key", type="password")
-    if not replicate_token:
-        replicate_token = st.text_input("Replicate Token", type="password")
-
-    st.divider()
-    MODEL_OPTIONS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"]
-    selected_model = st.selectbox("🧠 Select Model", MODEL_OPTIONS)
+    if not google_key:
+        google_key = st.text_input("Google API Key", type="password")
+    if not google_cx:
+        google_cx = st.text_input("Search Engine ID (CX)", type="password")
     
-    if st.button("🗑️ Clear Cache"):
-        st.session_state.transcription = None
-        st.session_state.isl_data = None
-        st.session_state.video_url = None
+    st.divider()
+    if st.button("🗑️ Reset App"):
+        for key in st.session_state.keys():
+            del st.session_state[key]
         st.rerun()
 
 # -------------------------------
-# 🎧 FUNCTIONS
+# 🛠️ HELPER FUNCTIONS
 # -------------------------------
+
 def transcribe_audio(audio_bytes):
     try:
         url = "https://api.groq.com/openai/v1/audio/transcriptions"
         headers = {"Authorization": f"Bearer {groq_key}"}
         files = {"file": ("audio.wav", audio_bytes, "audio/wav"), "model": (None, "whisper-large-v3")}
         response = requests.post(url, headers=headers, files=files)
-        if response.status_code == 200:
-            return response.json().get("text", "")
-        return None
+        return response.json().get("text", "") if response.status_code == 200 else None
     except Exception as e:
         st.error(f"Transcription Error: {e}")
         return None
 
-def get_isl(text):
-    # Updated system prompt to ensure the video model gets a RICH visual description
+def get_isl_search_query(text):
+    """Converts spoken text into ISL Gloss and a Search Query"""
     system_prompt = (
         "Convert English to Indian Sign Language (ISL). "
-        "Respond ONLY in JSON format: "
-        "{"
-        "\"spoken_text\": \"original text\","
-        "\"isl_gloss\": \"UPPERCASE GLOSS SYMBOLS\","
-        "\"rendering_prompt\": \"A high-quality video of a person performing Indian Sign Language for: [Describe the movement in detail here]\""
-        "}"
+        "Provide a JSON response with: "
+        "1. 'isl_gloss': The ISL symbols. "
+        "2. 'search_query': A optimized string to find a sign language video on YouTube for this specific phrase."
     )
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
     data = {
-        "model": selected_model, 
-        "messages": [
-            {"role": "system", "content": system_prompt}, 
-            {"role": "user", "content": f"Convert this to ISL: {text}"}
-        ], 
-        "temperature": 0.2
+        "model": "llama-3.3-70b-versatile",
+        "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": text}],
+        "response_format": {"type": "json_object"}
     }
     try:
         response = requests.post(url, headers=headers, json=data)
-        res_text = response.json()["choices"][0]["message"]["content"]
-        # Clean potential markdown
-        clean_json = res_text.strip().replace("```json", "").replace("```", "")
-        return json.loads(clean_json)
+        return json.loads(response.json()["choices"][0]["message"]["content"])
     except Exception as e:
         st.error(f"LLM Error: {e}")
         return None
 
-def generate_video(prompt, token):
+def find_video_on_web(query):
+    """Searches YouTube/Web for the sign language video"""
+    # We append "Indian Sign Language" to ensure the results are relevant
+    full_query = f"{query} Indian Sign Language sign"
+    search_url = "https://www.googleapis.com/customsearch/v1"
+    params = {
+        "key": google_key,
+        "cx": google_cx,
+        "q": full_query,
+        "num": 1,  # Get the top result
+        "safe": "active"
+    }
     try:
-        client = Client(api_token=token)
-        # We use a more descriptive prompt structure for Minimax
-        full_prompt = f"{prompt}. High quality, 4k, realistic person, neutral background, clear hand gestures."
-        
-        output = client.run(
-            "minimax/video-01",
-            input={
-                "prompt": full_prompt,
-                "prompt_optimizer": True
-            }
-        )
-        
-        # Minimax returns a URL string or a list containing the URL
-        if isinstance(output, list):
-            return output[0]
-        return output
+        response = requests.get(search_url, params=params)
+        results = response.json()
+        if "items" in results:
+            return results["items"][0]["link"]
+        return None
     except Exception as e:
-        st.error(f"Replicate Error: {e}")
+        st.error(f"Search Error: {e}")
         return None
 
 # -------------------------------
 # 🎤 MAIN UI
 # -------------------------------
 st.subheader("🎤 Step 1: Record Voice")
-audio = st.audio_input("Speak something")
+audio = st.audio_input("Ask for a sign (e.g., 'How to say Hello?')")
 
-# Logic: If new audio is detected and we haven't processed it yet
 if audio:
-    # Check if this audio is different from what we processed
-    current_audio_bytes = audio.getvalue()
-    
     if st.session_state.transcription is None:
         with st.spinner("🎧 Transcribing..."):
-            st.session_state.transcription = transcribe_audio(current_audio_bytes)
+            st.session_state.transcription = transcribe_audio(audio.getvalue())
         
         if st.session_state.transcription:
-            with st.spinner("🧠 Converting to ISL Gloss..."):
-                st.session_state.isl_data = get_isl(st.session_state.transcription)
+            with st.spinner("🧠 Analyzing ISL..."):
+                st.session_state.isl_data = get_isl_search_query(st.session_state.transcription)
             st.rerun()
 
-# --- DISPLAY AREA ---
+# --- RESULTS AREA ---
 if st.session_state.transcription:
-    st.info(f"🗣️ **You said:** {st.session_state.transcription}")
+    st.info(f"🗣️ **Recognized:** {st.session_state.transcription}")
 
     col1, col2 = st.columns(2)
-    
+
     with col1:
-        st.subheader("📘 ISL Interpretation")
+        st.subheader("📘 ISL Gloss")
         if st.session_state.isl_data:
-            st.success(f"**ISL Gloss:** {st.session_state.isl_data.get('isl_gloss')}")
-            with st.expander("View Raw JSON Data"):
-                st.json(st.session_state.isl_data)
+            st.code(st.session_state.isl_data.get("isl_gloss"), language="txt")
+            st.caption("This is the grammar structure for Indian Sign Language.")
 
     with col2:
-        st.subheader("🎥 Video Generation")
+        st.subheader("🎥 Video Reference")
         
-        # Generate Video Button
-        if st.button("🎬 Generate Sign Language Video"):
-            if not replicate_token:
-                st.error("Please enter Replicate Token in sidebar.")
+        if st.button("🔍 Search for Video"):
+            if not google_key or not google_cx:
+                st.warning("Please provide Google API keys in the sidebar.")
             else:
-                with st.spinner("🎞️ Generating video (Takes ~60 seconds)..."):
-                    video_res = generate_video(
-                        st.session_state.isl_data.get("rendering_prompt"), 
-                        replicate_token
-                    )
-                    if video_res:
-                        st.session_state.video_url = video_res
-                        st.success("Video Generated Successfully!")
+                with st.spinner("🌐 Searching the web for real ISL videos..."):
+                    query = st.session_state.isl_data.get("search_query")
+                    video_url = find_video_on_web(query)
+                    if video_url:
+                        st.session_state.video_link = video_url
                     else:
-                        st.error("Failed to generate video.")
+                        st.error("No relevant video found.")
 
-        # Persistent Video Display
-        if st.session_state.video_url:
-            st.video(st.session_state.video_url)
-            st.write(f"🔗 [Download / Direct Link]({st.session_state.video_url})")
+        # Show the video if found
+        if st.session_state.video_link:
+            st.success("Found a matching video!")
+            # Streamlit st.video automatically handles YouTube links
+            st.video(st.session_state.video_link)
+            st.write(f"🔗 [Source Link]({st.session_state.video_link})")
 
 st.divider()
-st.caption("⚡ Hint: If the video is too short, try speaking a longer sentence. The AI generates based on the visual prompt length.")
+st.caption("Note: This version searches for real human-recorded videos from the web rather than generating AI avatars.")
